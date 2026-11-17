@@ -3,20 +3,20 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Format Lizard</title>
-    <link rel="icon" type="image/png" href="assets/apple-icon.png?v=20261116-2120">
-    <link rel="apple-touch-icon" href="assets/apple-icon.png?v=20261116-2120">
-    <link rel="stylesheet" href="styles.css?v=20261116-2120">
+    <title>Format Lizard v2</title>
+    <link rel="icon" type="image/png" href="assets/apple-icon.png?v=20261117-1413">
+    <link rel="apple-touch-icon" href="assets/apple-icon.png?v=20261117-1413">
+    <link rel="stylesheet" href="styles.css?v=20261117-1413">
   </head>
   <body>
     <main class="app-shell">
       <header class="top-bar">
         <div class="brand-lockup">
-          <img src="assets/yelling-lizard-logo.png?v=20261116-2120" alt="" class="brand-logo" width="72" height="72">
+          <img src="assets/yelling-lizard-logo.png?v=20261117-1413" alt="" class="brand-logo" width="72" height="72">
           <div>
             <p class="eyebrow">JSON + XML + YAML + CSS formatter</p>
             <div class="title-row">
-              <h1>Format Lizard</h1>
+              <h1>Format Lizard <span class="version-badge">v2</span></h1>
               <span class="tool-symbol" aria-hidden="true">{ }</span>
             </div>
           </div>
@@ -26,7 +26,8 @@
             <summary>Tools</summary>
             <div class="tools-menu-list">
               <a href="https://www.davidbreyer.com/tools/">All Tools</a>
-              <a href="https://www.davidbreyer.com/format-lizard/" aria-current="page">Format Lizard</a>
+              <a href="./" aria-current="page">Format Lizard v2</a>
+              <a href="https://www.davidbreyer.com/format-lizard/">Format Lizard v1</a>
               <a href="https://www.davidbreyer.com/compare-lizard/">Compare Lizard</a>
               <a href="https://www.davidbreyer.com/mock-lizard/">Mock Lizard</a>
               <a href="https://www.davidbreyer.com/duplicate-lizard/">Duplicate Lizard</a>
@@ -82,6 +83,13 @@
         <div id="stats" class="stats">0 chars</div>
       </section>
 
+      <section id="processingPanel" class="processing-panel" aria-label="File processing" hidden>
+        <span id="processingLabel" role="status">Preparing file…</span>
+        <progress id="processingProgress" max="100" value="0" aria-label="Processing progress"></progress>
+        <button id="cancelButton" type="button">Cancel</button>
+      </section>
+      <p id="previewNotice" class="preview-notice" role="status" hidden></p>
+
       <section class="editor-grid" aria-label="Formatter editors">
         <div class="editor-pane">
           <div class="pane-header">
@@ -131,13 +139,15 @@
         <span id="workspaceStatus" role="status">Workspace saves in this browser.</span>
         <span>
           <a href="https://www.davidbreyer.com/tools/terms/">Terms/Privacy</a>
-          <a href="https://github.com/davidbreyer/format-lizard" target="_blank" rel="noopener noreferrer">GitHub</a>
-          <span id="releaseStamp" data-version>Version: 20261116-2120</span>
+          <a href="https://github.com/davidbreyer/format-lizard-v2" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <span id="releaseStamp" data-version>Version: 20261117-1413</span>
         </span>
       </footer>
     </main>
 
-    <script src="/tools/lizard-tools.js?v=20261116-2120"></script>
-    <script src="script.js?v=20261116-2120"></script>
+    <script src="/tools/lizard-tools.js?v=20261117-1413"></script>
+    <script src="format-core.js?v=20261117-1413"></script>
+    <script src="large-file.js?v=20261117-1413"></script>
+    <script src="script.js?v=20261117-1413"></script>
   </body>
 </html>

@@ -47,8 +47,8 @@ textarea {
   width: min(1480px, calc(100vw - 32px));
   min-height: calc(100vh - 32px);
   margin: 16px auto;
-  display: grid;
-  grid-template-rows: auto auto auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
 }
 
@@ -366,11 +366,40 @@ button:active {
 }
 
 .editor-grid {
+  flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
 }
+
+[hidden] { display: none !important; }
+
+.version-badge {
+  display: inline-block;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: var(--tool-accent-soft);
+  color: var(--tool-accent-strong);
+  font-size: 0.48em;
+  vertical-align: middle;
+}
+
+.processing-panel {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.processing-panel progress { flex: 1; min-width: 100px; accent-color: var(--accent); }
+.processing-panel span { font-size: 0.9rem; }
+.preview-notice { margin: 0; padding: 12px 14px; border-radius: 8px; background: var(--tool-accent-soft); color: var(--tool-accent-strong); font-size: 0.9rem; line-height: 1.5; }
+textarea[readonly] { cursor: text; }
 
 .editor-pane {
   min-height: 0;

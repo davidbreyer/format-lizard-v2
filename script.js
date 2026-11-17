@@ -25,9 +25,9 @@ const treeOutput = document.querySelector("#treeOutput");
 const releaseStamp = document.querySelector("#releaseStamp");
 const workspaceStatus = document.querySelector("#workspaceStatus");
 
-const appRelease = "20261116-2120";
+const appRelease = "20261117-1413";
 
-const workspaceStorageKey = "format-lizard.workspace.v1";
+const workspaceStorageKey = "format-lizard.workspace.v2";
 let workspaceSaveTimer = null;
 
 const formatSamples = {
@@ -79,10 +79,7 @@ const formatters = {
     format: formatJson,
     minify: minifyJson
   },
-  xml: {
-    format: formatXml,
-    minify: minifyXml
-  },
+  xml: {}, // XML is processed by formatter-worker.js.
   yaml: {
     format: formatYaml,
     minify: minifyYaml
@@ -135,8 +132,8 @@ document.addEventListener("visibilitychange", () => {
 });
 
 function onWorkspaceAction(control, event, action) {
-  control.addEventListener(event, () => {
-    action();
+  control.addEventListener(event, async () => {
+    await action();
     saveWorkspace();
   });
 }
@@ -146,6 +143,7 @@ function restoreWorkspace() {
   try {
     const raw = localStorage.getItem(workspaceStorageKey);
     if (raw === null) return false;
+    if (raw.length > WORKSPACE_CHAR_LIMIT * 2) throw new Error("Saved workspace is too large");
     workspace = JSON.parse(raw);
     if (typeof workspace?.input !== "string" || typeof workspace.output !== "string") {
       throw new Error("Invalid workspace");
@@ -177,6 +175,14 @@ function restoreWorkspace() {
 }
 
 function saveWorkspace() {
+  if (processing) return;
+  if (largeSourceFile || outputIsPreview || sourceInput.value.length + formattedOutput.value.length > WORKSPACE_CHAR_LIMIT) {
+    clearTimeout(workspaceSaveTimer);
+    workspaceSaveTimer = null;
+    try { localStorage.removeItem(workspaceStorageKey); } catch { /* Storage may be unavailable. */ }
+    setWorkspaceStatus("Large workspace stays in this tab only. Save output before closing.");
+    return;
+  }
   clearTimeout(workspaceSaveTimer);
   workspaceSaveTimer = null;
   const workspace = {
@@ -205,6 +211,11 @@ function setWorkspaceStatus(message) {
 }
 
 function formatInput() {
+  if (formatSelect.value === "xml" || largeSourceFile || sourceInput.value.length > LARGE_FILE_BYTES) {
+    return processInBackground("format");
+  }
+  resetWorkerOutput();
+  fullInputCharacters = null;
   const input = sourceInput.value.trim();
   if (!input) {
     formattedOutput.value = "";
@@ -239,24 +250,7 @@ function formatInput() {
 async function openSelectedFile() {
   const [file] = fileInput.files;
   fileInput.value = "";
-
-  if (!file) {
-    return;
-  }
-
-  try {
-    const content = await file.text();
-    sourceInput.value = content;
-    formattedOutput.value = "";
-    delete formattedOutput.dataset.outputFormat;
-    clearTreeOutput();
-    applyDetectedOrNamedFormat(content, file.name);
-    formatInput();
-    saveWorkspace();
-    setStatus(`Opened ${file.name}`, "valid");
-  } catch {
-    setStatus("Could not open file", "error");
-  }
+  if (file) await openFileInV2(file);
 }
 
 function applyDetectedOrNamedFormat(content, fileName) {
@@ -270,6 +264,11 @@ function applyDetectedOrNamedFormat(content, fileName) {
 }
 
 function minifyInput() {
+  if (formatSelect.value === "xml" || largeSourceFile || sourceInput.value.length > LARGE_FILE_BYTES) {
+    return processInBackground("minify");
+  }
+  resetWorkerOutput();
+  fullInputCharacters = null;
   const input = sourceInput.value.trim();
   if (!input) {
     formattedOutput.value = "";
@@ -301,763 +300,6 @@ function minifyInput() {
   updateCounts();
 }
 
-function formatJson(input) {
-  try {
-    const parsed = prepareJsonValue(JSON.parse(input));
-    return JSON.stringify(parsed, null, getIndent());
-  } catch (error) {
-    throw new Error(getJsonErrorMessage(error));
-  }
-}
-
-function minifyJson(input) {
-  try {
-    return JSON.stringify(prepareJsonValue(JSON.parse(input)));
-  } catch (error) {
-    throw new Error(getJsonErrorMessage(error));
-  }
-}
-
-function prepareJsonValue(value) {
-  return sortKeys.checked ? sortJsonKeys(value) : value;
-}
-
-function sortJsonKeys(value) {
-  if (Array.isArray(value)) {
-    return value.map(sortJsonKeys);
-  }
-
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  return Object.keys(value)
-    .sort((left, right) => left.localeCompare(right))
-    .reduce((sorted, key) => {
-      sorted[key] = sortJsonKeys(value[key]);
-      return sorted;
-    }, {});
-}
-
-function formatXml(input) {
-  const document = parseXml(input);
-  const declaration = getXmlDeclaration(input);
-  const body = Array.from(document.childNodes)
-    .map((node) => formatXmlNode(node, 0))
-    .filter(Boolean)
-    .join("\n");
-  return declaration ? `${declaration}\n${body}` : body;
-}
-
-function minifyXml(input) {
-  const document = parseXml(input);
-  const declaration = getXmlDeclaration(input);
-  const body = new XMLSerializer()
-    .serializeToString(document)
-    .replace(/>\s+</g, "><")
-    .trim();
-  return declaration ? `${declaration}${stripXmlDeclaration(body)}` : body;
-}
-
-function parseXml(input) {
-  const document = new DOMParser().parseFromString(input, "application/xml");
-  const parserError = document.querySelector("parsererror");
-  if (parserError) {
-    throw new Error(getXmlErrorMessage(parserError));
-  }
-  return document;
-}
-
-function getXmlDeclaration(input) {
-  const match = input.trimStart().match(/^<\?xml\s+[^?]*\?>/i);
-  return match ? match[0] : "";
-}
-
-function stripXmlDeclaration(input) {
-  return input.replace(/^<\?xml\s+[^?]*\?>/i, "");
-}
-
-function formatXmlNode(node, level) {
-  if (node.nodeType === Node.PROCESSING_INSTRUCTION_NODE) {
-    return formatXmlProcessingInstruction(node, level);
-  }
-
-  if (node.nodeType === Node.COMMENT_NODE) {
-    return `${getIndentString().repeat(level)}<!--${node.nodeValue}-->`;
-  }
-
-  if (node.nodeType === Node.CDATA_SECTION_NODE) {
-    return `${getIndentString().repeat(level)}<![CDATA[${node.nodeValue}]]>`;
-  }
-
-  if (node.nodeType === Node.DOCUMENT_TYPE_NODE) {
-    return formatXmlDoctype(node, level);
-  }
-
-  if (node.nodeType === Node.TEXT_NODE) {
-    const text = node.textContent.trim();
-    return text ? `${getIndentString().repeat(level)}${escapeXmlText(text)}` : "";
-  }
-
-  if (node.nodeType !== Node.ELEMENT_NODE) {
-    return "";
-  }
-
-  const indentation = getIndentString();
-  const prefix = indentation.repeat(level);
-  const attributes = formatXmlAttributes(node);
-  const childNodes = Array.from(node.childNodes).filter((child) => {
-    return child.nodeType !== Node.TEXT_NODE || child.textContent.trim();
-  });
-
-  if (!childNodes.length) {
-    return `${prefix}<${node.nodeName}${attributes} />`;
-  }
-
-  if (childNodes.length === 1) {
-    const [child] = childNodes;
-    if (child.nodeType === Node.TEXT_NODE) {
-      return child.textContent.trim()
-        ? `${prefix}<${node.nodeName}${attributes}>${escapeXmlText(child.textContent.trim())}</${node.nodeName}>`
-        : `${prefix}<${node.nodeName}${attributes} />`;
-    }
-
-    if (child.nodeType === Node.CDATA_SECTION_NODE) {
-      return `${prefix}<${node.nodeName}${attributes}><![CDATA[${child.nodeValue}]]></${node.nodeName}>`;
-    }
-  }
-
-  const lines = [`${prefix}<${node.nodeName}${attributes}>`];
-
-  childNodes.forEach((child) => {
-    const formatted = formatXmlNode(child, level + 1);
-    if (formatted) {
-      lines.push(formatted);
-    }
-  });
-
-  lines.push(`${prefix}</${node.nodeName}>`);
-  return lines.join("\n");
-}
-
-function formatXmlProcessingInstruction(node, level) {
-  const prefix = getIndentString().repeat(level);
-  return node.data
-    ? `${prefix}<?${node.nodeName} ${node.data}?>`
-    : `${prefix}<?${node.nodeName}?>`;
-}
-
-function formatXmlDoctype(node, level) {
-  const prefix = getIndentString().repeat(level);
-  if (node.publicId) {
-    return `${prefix}<!DOCTYPE ${node.name} PUBLIC "${node.publicId}" "${node.systemId}">`;
-  }
-
-  return node.systemId
-    ? `${prefix}<!DOCTYPE ${node.name} SYSTEM "${node.systemId}">`
-    : `${prefix}<!DOCTYPE ${node.name}>`;
-}
-
-function formatXmlAttributes(node) {
-  return Array.from(node.attributes)
-    .map((attribute) => ` ${attribute.name}="${escapeXmlText(attribute.value)}"`)
-    .join("");
-}
-
-function formatYaml(input) {
-  const parsed = parseYaml(input);
-  return stringifyYaml(parsed, 0);
-}
-
-function minifyYaml(input) {
-  const parsed = parseYaml(input);
-  return stringifyYaml(parsed, 0, { compact: true });
-}
-
-function parseYaml(input) {
-  const lines = normalizeYamlLines(input);
-  if (!lines.length) {
-    throw new Error("YAML is empty");
-  }
-
-  const [value, nextIndex] = parseYamlBlock(lines, 0, lines[0].indent);
-  if (nextIndex < lines.length) {
-    throw new Error(`Invalid YAML indentation at line ${lines[nextIndex].line}`);
-  }
-
-  return value;
-}
-
-function normalizeYamlLines(input) {
-  return input
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
-    .map((rawLine, index) => {
-      if (/^\t+/.test(rawLine)) {
-        throw new Error(`YAML tabs are not supported at line ${index + 1}`);
-      }
-
-      const trimmedComment = stripYamlComment(rawLine);
-      if (!trimmedComment.trim()) {
-        return null;
-      }
-
-      return {
-        indent: trimmedComment.match(/^ */)[0].length,
-        text: trimmedComment.trim(),
-        line: index + 1
-      };
-    })
-    .filter(Boolean);
-}
-
-function stripYamlComment(line) {
-  let quote = null;
-
-  for (let index = 0; index < line.length; index += 1) {
-    const char = line[index];
-    const previous = line[index - 1];
-
-    if ((char === "\"" || char === "'") && previous !== "\\") {
-      quote = quote === char ? null : quote || char;
-    }
-
-    if (char === "#" && !quote && (!index || /\s/.test(previous))) {
-      return line.slice(0, index).trimEnd();
-    }
-  }
-
-  return line.trimEnd();
-}
-
-function parseYamlBlock(lines, index, indent) {
-  if (index >= lines.length) {
-    return [null, index];
-  }
-
-  if (lines[index].indent < indent) {
-    return [null, index];
-  }
-
-  if (lines[index].indent !== indent) {
-    throw new Error(`Invalid YAML indentation at line ${lines[index].line}`);
-  }
-
-  return lines[index].text.startsWith("- ")
-    ? parseYamlSequence(lines, index, indent)
-    : parseYamlMapping(lines, index, indent);
-}
-
-function parseYamlMapping(lines, index, indent) {
-  const result = {};
-  let cursor = index;
-
-  while (cursor < lines.length) {
-    const line = lines[cursor];
-    if (line.indent < indent) {
-      break;
-    }
-
-    if (line.indent !== indent) {
-      throw new Error(`Invalid YAML indentation at line ${line.line}`);
-    }
-
-    if (line.text.startsWith("- ")) {
-      break;
-    }
-
-    const [key, rawValue] = splitYamlKeyValue(line.text, line.line);
-    cursor += 1;
-
-    if (rawValue) {
-      result[key] = parseYamlScalar(rawValue, line.line);
-      continue;
-    }
-
-    if (cursor < lines.length && lines[cursor].indent > indent) {
-      [result[key], cursor] = parseYamlBlock(lines, cursor, lines[cursor].indent);
-    } else {
-      result[key] = null;
-    }
-  }
-
-  return [result, cursor];
-}
-
-function parseYamlSequence(lines, index, indent) {
-  const result = [];
-  let cursor = index;
-
-  while (cursor < lines.length) {
-    const line = lines[cursor];
-    if (line.indent < indent) {
-      break;
-    }
-
-    if (line.indent !== indent || !line.text.startsWith("- ")) {
-      break;
-    }
-
-    const itemText = line.text.slice(2).trim();
-    cursor += 1;
-
-    if (!itemText) {
-      if (cursor < lines.length && lines[cursor].indent > indent) {
-        const parsed = parseYamlBlock(lines, cursor, lines[cursor].indent);
-        result.push(parsed[0]);
-        cursor = parsed[1];
-      } else {
-        result.push(null);
-      }
-      continue;
-    }
-
-    if (looksLikeYamlKeyValue(itemText)) {
-      const [key, rawValue] = splitYamlKeyValue(itemText, line.line);
-      const item = {};
-      item[key] = rawValue ? parseYamlScalar(rawValue, line.line) : null;
-
-      if (cursor < lines.length && lines[cursor].indent > indent) {
-        const parsed = parseYamlMapping(lines, cursor, lines[cursor].indent);
-        Object.assign(item, parsed[0]);
-        cursor = parsed[1];
-      }
-
-      result.push(item);
-      continue;
-    }
-
-    result.push(parseYamlScalar(itemText, line.line));
-  }
-
-  return [result, cursor];
-}
-
-function splitYamlKeyValue(text, lineNumber) {
-  const colonIndex = findYamlSeparator(text);
-  if (colonIndex < 1) {
-    throw new Error(`Invalid YAML mapping at line ${lineNumber}`);
-  }
-
-  const key = text.slice(0, colonIndex).trim();
-  const value = text.slice(colonIndex + 1).trim();
-  if (!key) {
-    throw new Error(`Invalid YAML key at line ${lineNumber}`);
-  }
-
-  return [unquoteYamlKey(key), value];
-}
-
-function findYamlSeparator(text) {
-  let quote = null;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const previous = text[index - 1];
-    const next = text[index + 1];
-
-    if ((char === "\"" || char === "'") && previous !== "\\") {
-      quote = quote === char ? null : quote || char;
-    }
-
-    if (char === ":" && !quote && (!next || /\s/.test(next))) {
-      return index;
-    }
-  }
-
-  return -1;
-}
-
-function looksLikeYamlKeyValue(text) {
-  return findYamlSeparator(text) > 0;
-}
-
-function unquoteYamlKey(key) {
-  if (
-    (key.startsWith("\"") && key.endsWith("\"")) ||
-    (key.startsWith("'") && key.endsWith("'"))
-  ) {
-    return parseYamlScalar(key, 0);
-  }
-
-  return key;
-}
-
-function parseYamlScalar(value, lineNumber) {
-  if (!value) {
-    return null;
-  }
-
-  if (value.startsWith("[") || value.startsWith("{")) {
-    try {
-      return JSON.parse(value);
-    } catch {
-      throw new Error(`Unsupported YAML flow value at line ${lineNumber}`);
-    }
-  }
-
-  if (value.startsWith("\"") && value.endsWith("\"")) {
-    try {
-      return JSON.parse(value);
-    } catch {
-      throw new Error(`Invalid quoted YAML string at line ${lineNumber}`);
-    }
-  }
-
-  if (value.startsWith("'") && value.endsWith("'")) {
-    return value.slice(1, -1).replace(/''/g, "'");
-  }
-
-  if (/^(true|false)$/i.test(value)) {
-    return value.toLowerCase() === "true";
-  }
-
-  if (/^(null|~)$/i.test(value)) {
-    return null;
-  }
-
-  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value)) {
-    return Number(value);
-  }
-
-  return value;
-}
-
-function stringifyYaml(value, level, options = {}) {
-  const indentation = getIndentString();
-
-  if (Array.isArray(value)) {
-    if (!value.length) {
-      return "[]";
-    }
-
-    return value
-      .map((item) => {
-        const prefix = `${indentation.repeat(level)}-`;
-        if (isYamlScalar(item)) {
-          return `${prefix} ${formatYamlScalar(item)}`;
-        }
-
-        if (isPlainYamlObject(item)) {
-          return stringifyYamlSequenceObject(item, level, options);
-        }
-
-        return `${prefix}\n${stringifyYaml(item, level + 1, options)}`;
-      })
-      .join("\n");
-  }
-
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value);
-    if (!entries.length) {
-      return "{}";
-    }
-
-    return entries
-      .map(([key, childValue]) => {
-        const prefix = `${indentation.repeat(level)}${formatYamlKey(key)}:`;
-        if (isYamlScalar(childValue)) {
-          return `${prefix} ${formatYamlScalar(childValue)}`;
-        }
-
-        return `${prefix}\n${stringifyYaml(childValue, level + 1, options)}`;
-      })
-      .join("\n");
-  }
-
-  return `${indentation.repeat(level)}${formatYamlScalar(value)}`;
-}
-
-function stringifyYamlSequenceObject(value, level, options) {
-  const indentation = getIndentString();
-  const entries = Object.entries(value);
-  const childIndent = indentation.repeat(level + 1);
-
-  return entries
-    .map(([key, childValue], index) => {
-      const prefix = index === 0 ? `${indentation.repeat(level)}- ` : childIndent;
-      const keyPrefix = `${prefix}${formatYamlKey(key)}:`;
-      if (isYamlScalar(childValue)) {
-        return `${keyPrefix} ${formatYamlScalar(childValue)}`;
-      }
-
-      return `${keyPrefix}\n${stringifyYaml(childValue, level + 2, options)}`;
-    })
-    .join("\n");
-}
-
-function isPlainYamlObject(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isYamlScalar(value) {
-  return !value || typeof value !== "object";
-}
-
-function formatYamlKey(key) {
-  return /^[A-Za-z_][\w.-]*$/.test(key) ? key : JSON.stringify(key);
-}
-
-function formatYamlScalar(value) {
-  if (value === null) {
-    return "null";
-  }
-
-  if (typeof value === "string") {
-    return shouldQuoteYamlString(value) ? JSON.stringify(value) : value;
-  }
-
-  return String(value);
-}
-
-function shouldQuoteYamlString(value) {
-  return (
-    !value ||
-    /^[-?:,[\]{}#&*!|>'"%@`]/.test(value) ||
-    /\s$|^\s/.test(value) ||
-    /:\s/.test(value) ||
-    /\s#/.test(value) ||
-    /^(?:true|false|null|~)$/i.test(value) ||
-    /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(value)
-  );
-}
-
-function formatCss(input) {
-  const tokens = tokenizeCss(input);
-  validateCssTokens(tokens);
-  const indentation = getIndentString();
-  const lines = [];
-  let level = 0;
-
-  tokens.forEach((token, index) => {
-    const previous = tokens[index - 1];
-    const next = tokens[index + 1];
-
-    if (token.type === "comment") {
-      pushCssLine(lines, level, token.value.trim());
-      return;
-    }
-
-    if (token.value === "{") {
-      appendCssText(lines, " {", level);
-      level += 1;
-      return;
-    }
-
-    if (token.value === "}") {
-      level = Math.max(0, level - 1);
-      if (previous && previous.value !== "{" && previous.value !== ";" && previous.value !== "}") {
-        appendCssText(lines, ";", level + 1);
-      }
-      pushCssLine(lines, level, "}");
-      if (next && next.value !== "}") {
-        lines.push("");
-      }
-      return;
-    }
-
-    if (token.value === ";") {
-      appendCssText(lines, ";", level);
-      return;
-    }
-
-    if (token.value === ":") {
-      appendCssText(lines, isCssSelectorColon(tokens, index) ? ":" : ": ", level);
-      return;
-    }
-
-    if (token.value === ",") {
-      appendCssText(lines, ", ", level);
-      return;
-    }
-
-    const text = normalizeCssText(token.value);
-    if (previous && (previous.value === "{" || previous.value === ";" || previous.type === "comment")) {
-      pushCssLine(lines, level, text);
-    } else {
-      appendCssText(lines, text, level);
-    }
-  });
-
-  return lines
-    .filter((line, index, allLines) => line || (allLines[index - 1] && allLines[index + 1]))
-    .join("\n")
-    .replace(/[ \t]+$/gm, "")
-    .trim();
-}
-
-function minifyCss(input) {
-  const tokens = tokenizeCss(input);
-  validateCssTokens(tokens);
-  let output = "";
-
-  tokens.forEach((token) => {
-    if (token.type === "comment") {
-      if (token.value.startsWith("/*!")) {
-        output += token.value;
-      }
-      return;
-    }
-
-    if (token.type === "punctuation") {
-      output = output.trimEnd();
-      output += token.value;
-      return;
-    }
-
-    const value = normalizeCssText(token.value);
-    const previous = output[output.length - 1] || "";
-    if (previous && needsCssSeparator(previous, value[0])) {
-      output += " ";
-    }
-    output += value;
-  });
-
-  return output.trim();
-}
-
-function tokenizeCss(input) {
-  const tokens = [];
-  let buffer = "";
-  let quote = null;
-  let parenDepth = 0;
-
-  for (let index = 0; index < input.length; index += 1) {
-    const char = input[index];
-    const next = input[index + 1];
-
-    if (quote) {
-      buffer += char;
-      if (char === "\\" && next) {
-        buffer += next;
-        index += 1;
-        continue;
-      }
-      if (char === quote) {
-        quote = null;
-      }
-      continue;
-    }
-
-    if (char === "\"" || char === "'") {
-      quote = char;
-      buffer += char;
-      continue;
-    }
-
-    if (char === "/" && next === "*") {
-      flushCssBuffer(tokens, buffer);
-      buffer = "";
-      const end = input.indexOf("*/", index + 2);
-      if (end === -1) {
-        throw new Error(`Unclosed CSS comment at line ${getLineAndColumn(input, index).line}`);
-      }
-      tokens.push({ type: "comment", value: input.slice(index, end + 2) });
-      index = end + 1;
-      continue;
-    }
-
-    if (char === "(") {
-      parenDepth += 1;
-      buffer += char;
-      continue;
-    }
-
-    if (char === ")") {
-      parenDepth = Math.max(0, parenDepth - 1);
-      buffer += char;
-      continue;
-    }
-
-    if (!parenDepth && "{}:;,".includes(char)) {
-      flushCssBuffer(tokens, buffer);
-      buffer = "";
-      tokens.push({ type: "punctuation", value: char });
-      continue;
-    }
-
-    buffer += char;
-  }
-
-  if (quote) {
-    throw new Error("Unclosed CSS string");
-  }
-
-  flushCssBuffer(tokens, buffer);
-  return tokens;
-}
-
-function flushCssBuffer(tokens, buffer) {
-  const value = normalizeCssText(buffer);
-  if (value) {
-    tokens.push({ type: "text", value });
-  }
-}
-
-function validateCssTokens(tokens) {
-  let depth = 0;
-
-  tokens.forEach((token) => {
-    if (token.value === "{") {
-      depth += 1;
-    }
-
-    if (token.value === "}") {
-      depth -= 1;
-      if (depth < 0) {
-        throw new Error("Unexpected CSS closing brace");
-      }
-    }
-  });
-
-  if (depth > 0) {
-    throw new Error("Unclosed CSS block");
-  }
-}
-
-function isCssSelectorColon(tokens, index) {
-  for (let cursor = index + 1; cursor < tokens.length; cursor += 1) {
-    const token = tokens[cursor];
-    if (token.value === "{") {
-      return true;
-    }
-    if (token.value === ";" || token.value === "}") {
-      return false;
-    }
-  }
-
-  return false;
-}
-
-function pushCssLine(lines, level, text) {
-  lines.push(`${getIndentString().repeat(level)}${text}`);
-}
-
-function appendCssText(lines, text, level) {
-  if (!lines.length || lines[lines.length - 1] === "") {
-    pushCssLine(lines, level, text.trimStart());
-    return;
-  }
-
-  lines[lines.length - 1] += text;
-}
-
-function normalizeCssText(value) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function needsCssSeparator(previous, next) {
-  return /[\w%)#.-]/.test(previous) && /[\w.#-]/.test(next);
-}
-
-function getIndent() {
-  return indentSelect.value === "tab" ? "\t" : Number(indentSelect.value);
-}
-
-function getIndentString() {
-  return indentSelect.value === "tab" ? "\t" : " ".repeat(Number(indentSelect.value));
-}
-
 function handleFormatChange() {
   const selectedFormat = formatSelect.value;
   updateFormatControls();
@@ -1074,6 +316,17 @@ function handleFormatChange() {
 }
 
 function handleInputChange(event) {
+  fullInputCharacters = null;
+  resetWorkerOutput();
+  if (sourceInput.value.length > LARGE_FILE_BYTES) {
+    if (looksLikeXml(sourceInput.value.slice(0, 4096).trimStart())) {
+      formatSelect.value = "xml";
+      updateFormatControls();
+    }
+    setStatus("Large input ready. Choose Format or Minify to process in the background.", "idle");
+    updateCounts();
+    return;
+  }
   autoDetectFormat(sourceInput.value);
   if (event.inputType === "insertFromPaste" && formatSelect.value === "json") {
     formatInput();
@@ -1175,6 +428,7 @@ function looksLikeYaml(input) {
 }
 
 function updateFormatControls() {
+  formatSelect.disabled = Boolean(largeSourceFile);
   sourceInput.placeholder = placeholders[formatSelect.value] || "";
   formattedOutput.placeholder = `Formatted ${getFormatLabel()} will appear here`;
   const isJson = formatSelect.value === "json";
@@ -1184,6 +438,7 @@ function updateFormatControls() {
 }
 
 function unescapeJsonString() {
+  resetWorkerOutput();
   if (formatSelect.value !== "json") {
     setStatus("Unescape is only available for JSON.", "error");
     return;
@@ -1215,6 +470,7 @@ function unescapeJsonString() {
 }
 
 function convertJsonToXml() {
+  resetWorkerOutput();
   if (formatSelect.value !== "json") {
     setStatus("JSON to XML is only available for JSON input.", "error");
     return;
@@ -1242,82 +498,11 @@ function convertJsonToXml() {
   updateCounts();
 }
 
-function jsonValueToXmlDocument(value) {
-  const rootName = getJsonRootName(value);
-  const body = jsonValueToXml(value, rootName, 0);
-  return `<?xml version="1.0" encoding="UTF-8"?>\n${body}`;
-}
-
-function getJsonRootName(value) {
-  if (Array.isArray(value)) {
-    return "items";
-  }
-
-  return "root";
-}
-
-function jsonValueToXml(value, tagName, level) {
-  const indentation = getIndentString();
-  const safeTagName = toXmlTagName(tagName);
-  const prefix = indentation.repeat(level);
-
-  if (Array.isArray(value)) {
-    if (!value.length) {
-      return `${prefix}<${safeTagName}></${safeTagName}>`;
-    }
-
-    const childLines = value.map((item) => jsonValueToXml(item, "item", level + 1));
-    return [
-      `${prefix}<${safeTagName}>`,
-      ...childLines,
-      `${prefix}</${safeTagName}>`
-    ].join("\n");
-  }
-
-  if (value && typeof value === "object") {
-    const entries = Object.entries(value);
-    if (!entries.length) {
-      return `${prefix}<${safeTagName}></${safeTagName}>`;
-    }
-
-    const childLines = entries.map(([key, childValue]) => jsonValueToXml(childValue, key, level + 1));
-    return [
-      `${prefix}<${safeTagName}>`,
-      ...childLines,
-      `${prefix}</${safeTagName}>`
-    ].join("\n");
-  }
-
-  if (value === null) {
-    return `${prefix}<${safeTagName} null="true"></${safeTagName}>`;
-  }
-
-  return `${prefix}<${safeTagName}>${escapeXmlText(String(value))}</${safeTagName}>`;
-}
-
-function toXmlTagName(value) {
-  const cleaned = String(value)
-    .trim()
-    .replace(/[^\w:.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-
-  if (!cleaned) {
-    return "value";
-  }
-
-  return /^[A-Za-z_:]/.test(cleaned) ? cleaned : `_${cleaned}`;
-}
-
-function escapeXmlText(value) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
 async function copyOutput() {
+  if (outputIsPreview) {
+    setStatus("Use Save to download the complete output.", "idle");
+    return;
+  }
   if (!formattedOutput.value) {
     setStatus("Nothing to copy", "error");
     return;
@@ -1334,13 +519,13 @@ async function copyOutput() {
 }
 
 function saveOutput() {
-  if (!formattedOutput.value) {
+  if (!fullOutputBlob && !formattedOutput.value) {
     setStatus("Nothing to save", "error");
     return;
   }
 
   const outputFormat = getOutputFormat();
-  const blob = new Blob([formattedOutput.value], {
+  const blob = fullOutputBlob || new Blob([formattedOutput.value], {
     type: `${mimeTypes[outputFormat] || "text/plain"};charset=utf-8`
   });
   const downloadUrl = URL.createObjectURL(blob);
@@ -1350,11 +535,18 @@ function saveOutput() {
   document.body.appendChild(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(downloadUrl);
+  setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
   setStatus("Saved output file", "valid");
 }
 
 function clearEditors() {
+  cancelProcessing(false);
+  largeSourceFile = null;
+  largeSourceEncoding = null;
+  fullInputCharacters = null;
+  resetWorkerOutput();
+  sourceInput.readOnly = false;
+  updateFormatControls();
   sourceInput.value = "";
   formattedOutput.value = "";
   delete formattedOutput.dataset.outputFormat;
@@ -1365,10 +557,10 @@ function clearEditors() {
 }
 
 function updateCounts() {
-  const inputLength = sourceInput.value.length;
-  const outputLength = formattedOutput.value.length;
-  inputCount.textContent = formatCount(inputLength);
-  outputCount.textContent = formatCount(outputLength);
+  const inputLength = fullInputCharacters ?? sourceInput.value.length;
+  const outputLength = fullOutputCharacters ?? formattedOutput.value.length;
+  inputCount.textContent = largeSourceFile && fullInputCharacters === null ? `${formatBytes(largeSourceFile.size)} file` : formatCount(inputLength);
+  outputCount.textContent = `${formatCount(outputLength)}${outputIsPreview ? " (preview)" : ""}`;
   stats.textContent = `${formatCount(inputLength)} input / ${formatCount(outputLength)} output`;
 }
 
@@ -1389,7 +581,7 @@ function setOutputView(view) {
 }
 
 function updateTreeOutput() {
-  if (getOutputFormat() !== "json" || !formattedOutput.value.trim()) {
+  if (getOutputFormat() !== "json" || outputIsPreview || formattedOutput.value.length > 100000 || !formattedOutput.value.trim()) {
     clearTreeOutput();
     return;
   }
@@ -1528,17 +720,6 @@ function getOutputFormat() {
   return formattedOutput.dataset.outputFormat || formatSelect.value;
 }
 
-function getJsonErrorMessage(error) {
-  const match = error.message.match(/position (\d+)/i);
-  if (!match) {
-    return error.message;
-  }
-
-  const position = Number(match[1]);
-  const location = getLineAndColumn(sourceInput.value, position);
-  return `Invalid JSON at line ${location.line}, column ${location.column}`;
-}
-
 function getXmlErrorMessage(parserError) {
   const text = parserError.textContent.replace(/\s+/g, " ").trim();
   const match = text.match(/line\s+(\d+).*column\s+(\d+)/i);
@@ -1550,15 +731,6 @@ function getXmlErrorMessage(parserError) {
 
 function getFormatLabel() {
   return formatLabels[formatSelect.value] || formatSelect.value.toUpperCase();
-}
-
-function getLineAndColumn(text, position) {
-  const before = text.slice(0, position);
-  const lines = before.split("\n");
-  return {
-    line: lines.length,
-    column: lines[lines.length - 1].length + 1
-  };
 }
 
 function formatCount(value) {

@@ -2,15 +2,21 @@
 
 This repository is the separate development home for Format Lizard v2, copied from the original project with its commit history preserved. The original repository and live site remain independent.
 
-The app currently matches the original formatter. Background processing, progress and cancellation, incremental XML processing, and large-file previews are planned; they are not implemented yet.
+XML formatting and minifying now run in a background worker, with progress and Cancel. Files over 2 MiB use a read-only input preview. Output over 2,097,152 characters shows a 65,536-character preview; **Save** downloads the complete result, and **Copy** is disabled for partial previews.
+
+The complete input remains available to Format and Minify in the current tab. Large workspaces are not written to browser storage; save the result before closing the tab. Small workspaces use a v2-specific storage key, separate from v1.
+
+XML is checked and written in two incremental passes without constructing a DOM. Mixed content, CDATA, namespace bindings, and `xml:space="preserve"` are retained. Output uses UTF-8. The parser is non-validating: it does not validate against a DTD or fetch external entities, and references to custom DTD entities report an error. JSON, YAML and CSS keep the existing engines; large inputs use a worker but still require their full parsed data in memory.
+
+Output Blobs and individual XML tokens still require memory. Performance depends on document structure and hardware; this is not a guarantee that every file size can be processed.
 
 A small JavaScript formatter app for JSON, XML, YAML, and CSS.
 
-Open `index.html` in a browser, paste compact or messy data into the left editor, or use `Open` to load a local `.json`, `.xml`, `.config`, `.yaml`, `.yml`, or `.css` file.
+Open the hosted website, paste compact or messy data into the left editor, or use `Open` to load a local `.json`, `.xml`, `.config`, `.yaml`, `.yml`, or `.css` file.
 Then format or minify it into the right editor.
 Use `Save` to download the formatted output as a `.json`, `.xml`, `.yaml`, or `.css` file.
 
-The browser remembers the last input, output, format, indentation, key sorting, and text or tree view. **Clear** empties the saved editors.
+For small workspaces, the browser remembers the last input, output, format, indentation, key sorting, and text or tree view. **Clear** empties the saved editors. JSON tree rendering is disabled above 100,000 output characters.
 
 For logo, color, versioning, and publishing details, see [BRAND_AND_DEPLOYMENT.md](BRAND_AND_DEPLOYMENT.md).
 
@@ -101,3 +107,18 @@ The script updates:
 - all `?v=...` cache-busting query strings in `index.html`
 
 The hook stages `index.html` and `script.js` so the generated release stamp is included in the commit.
+
+## Development and validation
+
+Use a current Node.js release (20 or later). Run `npm ci`, then `npm test` for worker and DOM integration checks. The DOM checks use jsdom and real Node worker threads; they do not verify browser rendering.
+
+Serve the repository over HTTP for local worker testing, for example `python -m http.server 8765`, then open `http://localhost:8765/`. Workers require an HTTP(S) origin; opening the HTML directly from disk is not supported for XML processing. `tests/browser.html` runs the integration checks in an actual browser when served from the same origin.
+
+To benchmark generated XML around 140 MB in PowerShell:
+
+```powershell
+$env:LIZARD_BENCHMARK = '1'
+node --test --test-name-pattern='140 MB' tests/worker.test.cjs
+```
+
+This is a synthetic worker benchmark, not a browser performance guarantee. The large fixture is generated in memory and is not committed.

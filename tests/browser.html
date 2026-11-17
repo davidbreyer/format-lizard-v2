@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Format Lizard v2 browser checks</title>
+<style>body{font:16px system-ui;padding:24px;color:#142018}iframe{width:100%;height:750px;border:1px solid #ccc}.pass{color:#35651a}.fail{color:#a00}</style>
+<h1>Format Lizard v2 browser checks</h1><p id="summary">Running…</p><ol id="results"></ol>
+<iframe id="app" src="../index.html" title="Formatter under test"></iframe>
+<script>
+const results = document.querySelector('#results');
+const check = (condition, message) => { if (!condition) throw new Error(message); };
+async function until(predicate) {
+  const deadline = performance.now() + 30000;
+  while (!predicate()) {
+    if (performance.now() > deadline) throw new Error('Timed out waiting for browser state');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+}
+document.querySelector('#app').addEventListener('load', async () => {
+  const app = document.querySelector('#app').contentWindow;
+  const doc = app.document;
+  const get = id => doc.getElementById(id);
+  const v1Workspace = localStorage.getItem('format-lizard.workspace.v1');
+  let failures = 0;
+  const run = async (name, action) => {
+    const item = document.createElement('li'); results.append(item);
+    try { await action(); item.textContent = 'PASS: ' + name; item.className = 'pass'; }
+    catch (error) { failures++; item.textContent = 'FAIL: ' + name + ': ' + error.message; item.className = 'fail'; }
+  };
+  await run('Small JSON, YAML, CSS, tree, conversion and saved workspace', async () => {
+    get('clearButton').click();
+    get('sourceInput').value = '{"z":1,"a":2}';
+    get('format').value = 'json'; get('sortKeys').checked = true;
+    await app.formatInput();
+    check(get('formattedOutput').value.indexOf('"a"') < get('formattedOutput').value.indexOf('"z"'), 'JSON sorting');
+    get('treeViewButton').click();
+    check(!get('treeOutput').classList.contains('hidden'), 'tree view');
+    app.convertJsonToXml();
+    check(get('formattedOutput').value.includes('<a>2</a>'), 'JSON to XML');
+    for (const [format, input, expected] of [['yaml','name: Ada\nready: true','name: Ada'],['css','a{color:red}','color: red;']]) {
+      get('format').value = format; get('sourceInput').value = input;
+      await app.formatInput(); check(get('formattedOutput').value.includes(expected), format);
+    }
+    app.saveWorkspace();
+    check(JSON.parse(localStorage.getItem('format-lizard.workspace.v2')).format === 'css', 'v2 workspace');
+  });
+  await run('Small XML runs in a real browser worker and reports errors', async () => {
+    get('format').value = 'xml'; get('sourceInput').value = '<r><p>A <b>B</b> C</p><x/></r>';
+    await app.formatInput();
+    check(get('formattedOutput').value.includes('<p>A <b>B</b> C</p>'), 'mixed content');
+    check(get('processingPanel').hidden, 'progress hidden after completion');
+    get('sourceInput').value = '<r><x></r>';
+    await app.formatInput();
+    check(get('status').textContent.includes('Invalid XML'), 'malformed error');
+    check(get('formattedOutput').value === '', 'no partial output');
+  });
+  const file = new File(['<root>', '<row a="1"><value>abc</value></row>'.repeat(100000), '</root>'], 'large.xml', { type: 'application/xml' });
+  await run('Large XML keeps bounded previews, progress, complete Save and full-source Minify', async () => {
+    let ticks = 0;
+    const heartbeat = setInterval(() => ticks++, 10);
+    try { await app.openFileInV2(file); } finally { clearInterval(heartbeat); }
+    check(ticks > 5, 'interface heartbeat stalled');
+    check(get('sourceInput').readOnly, 'input preview must be read-only');
+    check(get('sourceInput').value.length <= 65536, 'input preview size');
+    check(get('formattedOutput').value.length === 65536, 'output preview size');
+    check(!get('previewNotice').hidden, 'preview notice');
+    check(get('copyButton').disabled, 'copy must not silently copy a partial result');
+    let saved;
+    const createUrl = app.URL.createObjectURL;
+    const click = app.HTMLAnchorElement.prototype.click;
+    app.URL.createObjectURL = blob => { saved = blob; return createUrl(blob); };
+    app.HTMLAnchorElement.prototype.click = () => {};
+    try { app.saveOutput(); } finally { app.URL.createObjectURL = createUrl; app.HTMLAnchorElement.prototype.click = click; }
+    check(saved.size > file.size, 'full formatted Blob saved');
+    check((await saved.slice(-40).text()).endsWith('</root>'), 'saved final closing tag');
+    await app.minifyInput();
+    app.URL.createObjectURL = blob => { saved = blob; return createUrl(blob); };
+    app.HTMLAnchorElement.prototype.click = () => {};
+    try { app.saveOutput(); } finally { app.URL.createObjectURL = createUrl; app.HTMLAnchorElement.prototype.click = click; }
+    check(saved.size === file.size, 'Minify must process the complete original, not the preview');
+    check(localStorage.getItem('format-lizard.workspace.v2') === null, 'large file must not be serialized to storage');
+  });
+  await run('Cancel terminates active work; Clear restores normal editing', async () => {
+    const pending = app.openFileInV2(file);
+    await until(() => !get('processingPanel').hidden && get('processingLabel').textContent.includes('XML'));
+    get('cancelButton').click();
+    await pending;
+    check(get('status').textContent.includes('Cancelled'), 'cancel status');
+    check(get('processingPanel').hidden, 'cancel hides progress');
+    check(!get('formatButton').disabled, 'Format re-enabled');
+    get('clearButton').click();
+    check(!get('sourceInput').readOnly && get('sourceInput').value === '', 'Clear restores editing');
+    check(get('previewNotice').hidden, 'Clear hides preview notice');
+    check(!get('format').disabled, 'format selector re-enabled');
+  });
+  await run('V1 saved workspace is unchanged', async () => {
+    check(localStorage.getItem('format-lizard.workspace.v1') === v1Workspace, 'v1 storage changed');
+  });
+  const total = results.children.length;
+  document.querySelector('#summary').textContent = failures ? `${failures} of ${total} checks FAILED` : `All ${total} browser checks passed`;
+  document.title = failures ? 'FAIL — Format Lizard v2 checks' : 'PASS — Format Lizard v2 checks';
+});
+</script></html>
