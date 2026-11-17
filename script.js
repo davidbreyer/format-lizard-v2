@@ -25,7 +25,7 @@ const treeOutput = document.querySelector("#treeOutput");
 const releaseStamp = document.querySelector("#releaseStamp");
 const workspaceStatus = document.querySelector("#workspaceStatus");
 
-const appRelease = "20261117-1413";
+const appRelease = "20261117-1618";
 
 const workspaceStorageKey = "format-lizard.workspace.v2";
 let workspaceSaveTimer = null;
