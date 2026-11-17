@@ -1,4 +1,8 @@
-# Format Lizard
+# Format Lizard v2
+
+This repository is the separate development home for Format Lizard v2, copied from the original project with its commit history preserved. The original repository and live site remain independent.
+
+The app currently matches the original formatter. Background processing, progress and cancellation, incremental XML processing, and large-file previews are planned; they are not implemented yet.
 
 A small JavaScript formatter app for JSON, XML, YAML, and CSS.
 
@@ -38,22 +42,25 @@ Good next candidates:
 
 ## GitHub Pages
 
-The site publishes from the remote `gh-pages` branch:
+This repository uses `main` for source and history. Its `origin` must point to:
 
 ```text
-https://davidbreyer.github.io/format-lizard/
+https://github.com/davidbreyer/format-lizard-v2.git
 ```
 
-Normal deployment flow:
+To enable its own GitHub Pages site, open this repository's **Settings > Pages**, select **Deploy from a branch**, choose **main** and **/(root)**, then save.
+
+The expected Pages URL is `https://davidbreyer.github.io/format-lizard-v2/`; the account's custom domain may redirect it to `https://www.davidbreyer.com/format-lizard-v2/`. Creating or pushing the repository does not enable Pages by itself.
+
+Normal update flow after enabling Pages:
 
 ```powershell
 git add -- ...
 git commit -m "Some change"
-git push origin master
-git push origin master:gh-pages
+git push origin main
 ```
 
-`master` stores the source/history. `gh-pages` is the branch GitHub Pages serves publicly.
+Publish v2 only from this repository. Do not push v2 changes to the original `format-lizard` repository or its `gh-pages` branch.
 
 ## Release Stamp
 

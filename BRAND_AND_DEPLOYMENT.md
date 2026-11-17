@@ -1,6 +1,6 @@
 # Brand and Deployment Notes
 
-This file documents the Format Lizard logo, color palette, release/version stamp, and GitHub Pages publishing flow.
+This file documents the Format Lizard v2 logo, color palette, release/version stamp, and GitHub Pages publishing flow.
 
 ## Logo
 
@@ -137,38 +137,25 @@ So a normal commit includes the generated release stamp automatically.
 
 ## GitHub Pages
 
-This project publishes like Luftblasen.
-
-Repository:
+V2 has its own repository and deployment, independent of the original Format Lizard:
 
 ```text
-https://github.com/davidbreyer/format-lizard.git
+https://github.com/davidbreyer/format-lizard-v2.git
 ```
 
-Branches:
+Use `main` for source and history. In this repository's **Settings > Pages**, select **Deploy from a branch**, **main**, and **/(root)** to enable publishing. Pages must be enabled separately; pushing code alone does not enable it.
 
-- `master` - source/history branch.
-- `gh-pages` - public GitHub Pages branch.
+Expected site addresses after enabling Pages:
 
-The live site is served from `gh-pages`:
+- `https://davidbreyer.github.io/format-lizard-v2/`
+- `https://www.davidbreyer.com/format-lizard-v2/` if redirected to the account's custom domain.
 
-```text
-https://davidbreyer.github.io/format-lizard/
-```
-
-Because the user Pages site has a custom domain, GitHub may redirect to:
-
-```text
-https://www.davidbreyer.com/format-lizard/
-```
-
-Normal deployment flow:
+Normal update flow:
 
 ```powershell
 git add -- ...
 git commit -m "Some change"
-git push origin master
-git push origin master:gh-pages
+git push origin main
 ```
 
-Do not publish this app by copying it into the `davidbreyer.github.com` personal site repo. That was an earlier mistake. The formatter repo owns its source and deploys its own `gh-pages` branch.
+Check `git remote -v` before pushing: `origin` must be `davidbreyer/format-lizard-v2`. Do not publish v2 into the original `format-lizard` repository, its `gh-pages` branch, or the personal site repository.
